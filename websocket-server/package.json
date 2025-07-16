@@ -1,7 +1,7 @@
 {
-  "name": "twilio-realtime",
+  "name": "openai-twilio-realtime-rx-assistant-demo",
   "version": "1.0.0",
-  "description": "Twilio real-time server with TypeScript",
+  "description": "Twilio real-time server with TypeScript for OpenAI Rx Assistant Demo",
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
