@@ -144,6 +144,26 @@ function tryConnectModel() {
         ...config,
       },
     });
+
+    // Add a greeting message to trigger the AI to speak first
+    jsonSend(session.modelConn, {
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "Hello!."
+          }
+        ]
+      }
+    });
+
+    // Trigger the AI to respond with a greeting
+    jsonSend(session.modelConn, {
+      type: "response.create"
+    });
   });
 
   session.modelConn.on("message", handleModelMessage);
