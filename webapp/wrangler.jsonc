@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": ".open-next/worker.js",
+  "name": "twilio-realtime-frontend",
+  "compatibility_date": "2024-12-30",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "twilio-realtime-frontend"
+    }
+  ],
+  "vars": {
+    "NEXT_PUBLIC_BACKEND_URL": "https://openai-twilio-realtime-worker.hall-russets0w.workers.dev"
+  },
+  "r2_buckets": [
+    {
+      "binding": "TRACKS",
+      "bucket_name": "tracks"
+    }
+  ]
+} 

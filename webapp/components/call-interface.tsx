@@ -9,6 +9,7 @@ import FunctionCallsPanel from "@/components/function-calls-panel";
 import { Item } from "@/components/types";
 import handleRealtimeEvent from "@/lib/handle-realtime-event";
 import PhoneNumberChecklist from "@/components/phone-number-checklist";
+import { getBackendWsUrl } from "@/lib/config";
 
 const CallInterface = () => {
   const [selectedPhoneNumber, setSelectedPhoneNumber] = useState("");
@@ -19,7 +20,7 @@ const CallInterface = () => {
 
   useEffect(() => {
     if (allConfigsReady && !ws) {
-      const newWs = new WebSocket("ws://localhost:8081/logs");
+      const newWs = new WebSocket(`${getBackendWsUrl()}/logs`);
 
       newWs.onopen = () => {
         console.log("Connected to logs websocket");
@@ -57,6 +58,7 @@ const CallInterface = () => {
           <div className="col-span-3 flex flex-col h-full overflow-hidden">
             <SessionConfigurationPanel
               callStatus={callStatus}
+              ws={ws}
               onSave={(config) => {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                   const updateEvent = {

@@ -10,20 +10,32 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { Plus, Edit, Trash, Check, AlertCircle } from "lucide-react";
+import {
+  Plus,
+  Edit,
+  Trash,
+  Check,
+  AlertCircle,
+  Music,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { toolTemplates } from "@/lib/tool-templates";
 import { ToolConfigurationDialog } from "./tool-configuration-dialog";
 import { BackendTag } from "./backend-tag";
 import { useBackendTools } from "@/lib/use-backend-tools";
+import { getBackendHttpUrl } from "@/lib/config";
 
 interface SessionConfigurationPanelProps {
   callStatus: string;
   onSave: (config: any) => void;
+  ws?: WebSocket | null;
 }
 
 const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
   callStatus,
   onSave,
+  ws,
 }) => {
   const [instructions, setInstructions] = useState(
     "You are a helpful assistant in a phone call."
@@ -39,9 +51,11 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [isHoldMusicPlaying, setIsHoldMusicPlaying] = useState(false);
+  const [selectedHoldMusicType, setSelectedHoldMusicType] = useState("default");
 
   // Custom hook to fetch backend tools every 3 seconds
-  const backendTools = useBackendTools("http://localhost:8081/tools", 3000);
+  const backendTools = useBackendTools(`${getBackendHttpUrl()}/tools`, 3000);
 
   // Track changes to determine if there are unsaved modifications
   useEffect(() => {
@@ -146,6 +160,29 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
 
   const isBackendTool = (name: string): boolean => {
     return backendTools.some((t: any) => t.name === name);
+  };
+
+  const handleStartHoldMusic = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: "hold_music.start",
+          holdMusicType: selectedHoldMusicType,
+        })
+      );
+      setIsHoldMusicPlaying(true);
+    }
+  };
+
+  const handleStopHoldMusic = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: "hold_music.stop",
+        })
+      );
+      setIsHoldMusicPlaying(false);
+    }
   };
 
   return (
@@ -268,6 +305,69 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
                 "Save Configuration"
               )}
             </Button>
+
+            {/* Hold Music Controls */}
+            {callStatus === "connected" && (
+              <div className="mt-6 pt-4 border-t space-y-3">
+                <label className="text-sm font-medium leading-none">
+                  Hold Music Controls
+                </label>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-medium leading-none text-muted-foreground">
+                    Music Type
+                  </label>
+                  <Select
+                    value={selectedHoldMusicType}
+                    onValueChange={setSelectedHoldMusicType}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select hold music" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Default</SelectItem>
+                      <SelectItem value="classical">Classical</SelectItem>
+                      <SelectItem value="jazz">Jazz</SelectItem>
+                      <SelectItem value="ambient">Ambient</SelectItem>
+                      <SelectItem value="generated">Generated Tone</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    variant={isHoldMusicPlaying ? "secondary" : "default"}
+                    size="sm"
+                    onClick={handleStartHoldMusic}
+                    disabled={isHoldMusicPlaying || !ws}
+                    className="flex items-center"
+                  >
+                    <Music className="h-4 w-4 mr-2" />
+                    Start Hold
+                  </Button>
+                  <Button
+                    variant={!isHoldMusicPlaying ? "secondary" : "default"}
+                    size="sm"
+                    onClick={handleStopHoldMusic}
+                    disabled={!isHoldMusicPlaying || !ws}
+                    className="flex items-center"
+                  >
+                    <VolumeX className="h-4 w-4 mr-2" />
+                    Stop Hold
+                  </Button>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {isHoldMusicPlaying ? (
+                    <span className="flex items-center text-green-600">
+                      <Volume2 className="h-3 w-3 mr-1" />
+                      Hold music is playing
+                    </span>
+                  ) : (
+                    "Hold music will play for callers during function calls"
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </ScrollArea>
       </CardContent>

@@ -33,6 +33,14 @@ export const toolTemplates = [
             "enum": ["Rosie"],
             "type": "string"
           },
+          "patient_type": {
+            "enum": ["animal"],
+            "type": "string"
+          },
+          "species": {
+            "enum": ["dog"],
+            "type": "string"
+          },
           "medication": {
             "type": "object",
             "properties": {

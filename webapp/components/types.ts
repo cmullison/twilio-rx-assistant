@@ -17,8 +17,10 @@ export type Item = {
 
 export interface PhoneNumber {
   sid: string;
-  friendlyName: string;
+  friendlyName?: string;
+  friendly_name?: string;
   voiceUrl?: string;
+  voice_url?: string;
 }
 
 export type FunctionCall = {

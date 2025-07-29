@@ -1,11 +1,13 @@
 import { RawData, WebSocket } from "ws";
 import functions from "./functionHandlers";
+import { startHoldMusic, stopHoldMusic, resetHoldMusicState, isHoldMusicPlaying } from "./holdMusicService";
 
 interface Session {
   twilioConn?: WebSocket;
   frontendConn?: WebSocket;
   modelConn?: WebSocket;
   streamSid?: string;
+  callSid?: string;
   saved_config?: any;
   lastAssistantItem?: string;
   responseStartTimestamp?: number;
@@ -25,9 +27,11 @@ export function handleCallConnection(ws: WebSocket, openAIApiKey: string) {
   ws.on("close", () => {
     cleanupConnection(session.modelConn);
     cleanupConnection(session.twilioConn);
+    resetHoldMusicState(); // Clean up hold music when call ends
     session.twilioConn = undefined;
     session.modelConn = undefined;
     session.streamSid = undefined;
+    session.callSid = undefined;
     session.lastAssistantItem = undefined;
     session.responseStartTimestamp = undefined;
     session.latestMediaTimestamp = undefined;
@@ -45,6 +49,17 @@ export function handleFrontendConnection(ws: WebSocket) {
     session.frontendConn = undefined;
     if (!session.twilioConn && !session.modelConn) session = {};
   });
+}
+
+// Function to send audio to Twilio stream
+function sendAudioToStream(audioChunk: string): void {
+  if (session.twilioConn && session.streamSid) {
+    jsonSend(session.twilioConn, {
+      event: "media",
+      streamSid: session.streamSid,
+      media: { payload: audioChunk },
+    });
+  }
 }
 
 async function handleFunctionCall(item: { name: string; arguments: string }) {
@@ -82,9 +97,11 @@ function handleTwilioMessage(data: RawData) {
   switch (msg.event) {
     case "start":
       session.streamSid = msg.start.streamSid;
+      session.callSid = msg.start.callSid;
       session.latestMediaTimestamp = 0;
       session.lastAssistantItem = undefined;
       session.responseStartTimestamp = undefined;
+      console.log("Call started - Stream SID:", session.streamSid, "Call SID:", session.callSid);
       tryConnectModel();
       break;
     case "media":
@@ -105,6 +122,23 @@ function handleTwilioMessage(data: RawData) {
 function handleFrontendMessage(data: RawData) {
   const msg = parseMessage(data);
   if (!msg) return;
+
+  // Handle hold music control messages from frontend
+  if (msg.type === "hold_music.start") {
+    console.log("Frontend requested hold music start");
+    if (!isHoldMusicPlaying()) {
+      startHoldMusic(sendAudioToStream, msg.holdMusicType);
+    }
+    return;
+  }
+
+  if (msg.type === "hold_music.stop") {
+    console.log("Frontend requested hold music stop");
+    if (isHoldMusicPlaying()) {
+      stopHoldMusic();
+    }
+    return;
+  }
 
   if (isOpen(session.modelConn)) {
     jsonSend(session.modelConn, msg);
@@ -150,11 +184,11 @@ function tryConnectModel() {
       type: "conversation.item.create",
       item: {
         type: "message",
-        role: "user",
+        role: "system",
         content: [
           {
             type: "input_text",
-            text: "Hello!."
+            text: "When the call starts, greet the caller by saying 'Thank you for calling Fluff's Pharmacy, where our intent is all for your delight. This is the pharmacist speaking, how may I assist you today?'"
           }
         ]
       }
@@ -205,8 +239,20 @@ function handleModelMessage(data: RawData) {
     case "response.output_item.done": {
       const { item } = event;
       if (item.type === "function_call") {
+        // Start hold music when function call begins
+        if (!isHoldMusicPlaying()) {
+          console.log("Starting hold music for function call");
+          startHoldMusic(sendAudioToStream);
+        }
+        
         handleFunctionCall(item)
           .then((output) => {
+            // Stop hold music when function completes
+            if (isHoldMusicPlaying()) {
+              console.log("Stopping hold music after function call completion");
+              stopHoldMusic();
+            }
+            
             if (session.modelConn) {
               jsonSend(session.modelConn, {
                 type: "conversation.item.create",
@@ -221,6 +267,12 @@ function handleModelMessage(data: RawData) {
           })
           .catch((err) => {
             console.error("Error handling function call:", err);
+            
+            // Stop hold music even if function fails
+            if (isHoldMusicPlaying()) {
+              console.log("Stopping hold music after function call error");
+              stopHoldMusic();
+            }
           });
       }
       break;
@@ -266,6 +318,7 @@ function closeModel() {
 }
 
 function closeAllConnections() {
+  resetHoldMusicState(); // Clean up hold music when connections close
   if (session.twilioConn) {
     session.twilioConn.close();
     session.twilioConn = undefined;
@@ -279,6 +332,7 @@ function closeAllConnections() {
     session.frontendConn = undefined;
   }
   session.streamSid = undefined;
+  session.callSid = undefined;
   session.lastAssistantItem = undefined;
   session.responseStartTimestamp = undefined;
   session.latestMediaTimestamp = undefined;
@@ -304,4 +358,13 @@ function jsonSend(ws: WebSocket | undefined, obj: unknown) {
 
 function isOpen(ws?: WebSocket): ws is WebSocket {
   return !!ws && ws.readyState === WebSocket.OPEN;
+}
+
+// Export function to get hold music status for external use
+export function getHoldMusicStatus() {
+  return {
+    isPlaying: isHoldMusicPlaying(),
+    callSid: session.callSid,
+    streamSid: session.streamSid
+  };
 }

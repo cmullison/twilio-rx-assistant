@@ -18,11 +18,7 @@ export interface FunctionSchema {
   name: string;
   type: "function";
   description?: string;
-  parameters: {
-    type: string;
-    properties: Record<string, { type: string; description?: string }>;
-    required: string[];
-  };
+  parameters: any; // Made more flexible to support complex nested schemas
 }
 
 export interface FunctionHandler {

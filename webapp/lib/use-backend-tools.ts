@@ -11,7 +11,7 @@ export function useBackendTools(url: string, intervalMs: number) {
       fetch(url)
         .then((res) => res.json())
         .then((data) => {
-          if (isMounted) setTools(data);
+          if (isMounted) setTools(data as any[]);
         })
         .catch((error) => {
           // On failure, we just let it retry after interval

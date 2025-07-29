@@ -19,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { getBackendHttpUrl } from "@/lib/config";
 
 export default function ChecklistAndConfig({
   ready,
@@ -42,7 +43,6 @@ export default function ChecklistAndConfig({
 
   const [allChecksPassed, setAllChecksPassed] = useState(false);
   const [webhookLoading, setWebhookLoading] = useState(false);
-  const [ngrokLoading, setNgrokLoading] = useState(false);
 
   const appendedTwimlUrl = publicUrl ? `${publicUrl}/twiml` : "";
   const isWebhookMismatch =
@@ -54,13 +54,13 @@ export default function ChecklistAndConfig({
     const pollChecks = async () => {
       try {
         // 1. Check credentials
-        let res = await fetch("/api/twilio");
+        let res = await fetch(`${getBackendHttpUrl()}/twilio/credentials`);
         if (!res.ok) throw new Error("Failed credentials check");
-        const credData = await res.json();
+        const credData = (await res.json()) as { credentialsSet?: boolean };
         setHasCredentials(!!credData?.credentialsSet);
 
         // 2. Fetch numbers
-        res = await fetch("/api/twilio/numbers");
+        res = await fetch(`${getBackendHttpUrl()}/twilio/numbers`);
         if (!res.ok) throw new Error("Failed to fetch phone numbers");
         const numbersData = await res.json();
         if (Array.isArray(numbersData) && numbersData.length > 0) {
@@ -70,25 +70,29 @@ export default function ChecklistAndConfig({
             numbersData.find((p: PhoneNumber) => p.sid === currentNumberSid) ||
             numbersData[0];
           setCurrentNumberSid(selected.sid);
-          setCurrentVoiceUrl(selected.voiceUrl || "");
-          setSelectedPhoneNumber(selected.friendlyName || "");
+          setCurrentVoiceUrl(selected.voiceUrl || selected.voice_url || "");
+          setSelectedPhoneNumber(
+            selected.friendlyName || selected.friendly_name || ""
+          );
         }
 
-        // 3. Check local server & public URL
+        // 3. Check Cloudflare Worker & get public URL
         let foundPublicUrl = "";
         try {
-          const resLocal = await fetch("http://localhost:8081/public-url");
-          if (resLocal.ok) {
-            const pubData = await resLocal.json();
+          const resWorker = await fetch(`${getBackendHttpUrl()}/public-url`);
+          if (resWorker.ok) {
+            const pubData = (await resWorker.json()) as { publicUrl?: string };
             foundPublicUrl = pubData?.publicUrl || "";
             setLocalServerUp(true);
             setPublicUrl(foundPublicUrl);
+            setPublicUrlAccessible(true); // Cloudflare Workers are always publicly accessible
           } else {
-            throw new Error("Local server not responding");
+            throw new Error("Cloudflare Worker not responding");
           }
         } catch {
           setLocalServerUp(false);
           setPublicUrl("");
+          setPublicUrlAccessible(false);
         }
       } catch (err) {
         console.error(err);
@@ -107,7 +111,7 @@ export default function ChecklistAndConfig({
     if (!currentNumberSid || !appendedTwimlUrl) return;
     try {
       setWebhookLoading(true);
-      const res = await fetch("/api/twilio/numbers", {
+      const res = await fetch(`${getBackendHttpUrl()}/twilio/numbers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -122,31 +126,6 @@ export default function ChecklistAndConfig({
     } finally {
       setWebhookLoading(false);
     }
-  };
-
-  const checkNgrok = async () => {
-    if (!localServerUp || !publicUrl) return;
-    setNgrokLoading(true);
-    let success = false;
-    for (let i = 0; i < 5; i++) {
-      try {
-        const resTest = await fetch(publicUrl + "/public-url");
-        if (resTest.ok) {
-          setPublicUrlAccessible(true);
-          success = true;
-          break;
-        }
-      } catch {
-        // retry
-      }
-      if (i < 4) {
-        await new Promise((r) => setTimeout(r, 3000));
-      }
-    }
-    if (!success) {
-      setPublicUrlAccessible(false);
-    }
-    setNgrokLoading(false);
   };
 
   const checklist = useMemo(() => {
@@ -171,15 +150,26 @@ export default function ChecklistAndConfig({
         field:
           phoneNumbers.length > 0 ? (
             phoneNumbers.length === 1 ? (
-              <Input value={phoneNumbers[0].friendlyName || ""} disabled />
+              <Input
+                value={
+                  phoneNumbers[0].friendlyName ||
+                  phoneNumbers[0].friendly_name ||
+                  ""
+                }
+                disabled
+              />
             ) : (
               <Select
                 onValueChange={(value) => {
                   setCurrentNumberSid(value);
                   const selected = phoneNumbers.find((p) => p.sid === value);
                   if (selected) {
-                    setSelectedPhoneNumber(selected.friendlyName || "");
-                    setCurrentVoiceUrl(selected.voiceUrl || "");
+                    setSelectedPhoneNumber(
+                      selected.friendlyName || selected.friendly_name || ""
+                    );
+                    setCurrentVoiceUrl(
+                      selected.voiceUrl || selected.voice_url || ""
+                    );
                   }
                 }}
                 value={currentNumberSid}
@@ -190,7 +180,7 @@ export default function ChecklistAndConfig({
                 <SelectContent>
                   {phoneNumbers.map((phone) => (
                     <SelectItem key={phone.sid} value={phone.sid}>
-                      {phone.friendlyName}
+                      {phone.friendlyName || phone.friendly_name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -211,35 +201,20 @@ export default function ChecklistAndConfig({
           ),
       },
       {
-        label: "Start local WebSocket server",
+        label: "Deploy Cloudflare Worker",
         done: localServerUp,
-        description: "cd websocket-server && npm run dev",
-        field: null,
-      },
-      {
-        label: "Start ngrok",
-        done: publicUrlAccessible,
-        description: "Then set ngrok URL in websocket-server/.env",
-        field: (
-          <div className="flex items-center gap-2 w-full">
-            <div className="flex-1">
-              <Input value={publicUrl} disabled />
-            </div>
-            <div className="flex-1">
-              <Button
-                variant="outline"
-                onClick={checkNgrok}
-                disabled={ngrokLoading || !localServerUp || !publicUrl}
-                className="w-full"
-              >
-                {ngrokLoading ? (
-                  <Loader2 className="mr-2 h-4 animate-spin" />
-                ) : (
-                  "Check ngrok"
-                )}
-              </Button>
-            </div>
-          </div>
+        description: "cd do-server && npm run deploy",
+        field: localServerUp ? (
+          <Input value={publicUrl} disabled className="w-full" />
+        ) : (
+          <Button
+            className="w-full"
+            onClick={() =>
+              window.open("https://workers.cloudflare.com/", "_blank")
+            }
+          >
+            Open Cloudflare Dashboard
+          </Button>
         ),
       },
       {
@@ -249,12 +224,21 @@ export default function ChecklistAndConfig({
         field: (
           <div className="flex items-center gap-2 w-full">
             <div className="flex-1">
-              <Input value={currentVoiceUrl} disabled className="w-full" />
+              <Input
+                value={
+                  currentVoiceUrl ||
+                  (appendedTwimlUrl
+                    ? "Not configured"
+                    : "Waiting for worker URL...")
+                }
+                disabled
+                className="w-full"
+              />
             </div>
             <div className="flex-1">
               <Button
                 onClick={updateWebhook}
-                disabled={webhookLoading}
+                disabled={webhookLoading || !appendedTwimlUrl}
                 className="w-full"
               >
                 {webhookLoading ? (
@@ -279,7 +263,6 @@ export default function ChecklistAndConfig({
     isWebhookMismatch,
     appendedTwimlUrl,
     webhookLoading,
-    ngrokLoading,
     setSelectedPhoneNumber,
   ]);
 
@@ -287,11 +270,7 @@ export default function ChecklistAndConfig({
     setAllChecksPassed(checklist.every((item) => item.done));
   }, [checklist]);
 
-  useEffect(() => {
-    if (!ready) {
-      checkNgrok();
-    }
-  }, [localServerUp, ready]);
+  // Cloudflare Workers are always publicly accessible, no need to check ngrok
 
   useEffect(() => {
     if (!allChecksPassed) {

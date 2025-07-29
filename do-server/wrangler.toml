@@ -1,0 +1,43 @@
+name = "openai-twilio-realtime-worker"
+main = "src/index.ts"
+compatibility_date = "2025-07-29"
+
+# Required secrets (set with: wrangler secret put <SECRET_NAME>):
+# - OPENAI_API_KEY: Your OpenAI API key
+# - CLOUDFLARE_ACCOUNT_ID: Your Cloudflare account ID
+# - CLOUDFLARE_GATEWAY_ID: Your AI Gateway ID
+# - CLOUDFLARE_API_KEY: Your Cloudflare API key
+# - TWILIO_ACCOUNT_SID: Your Twilio account SID
+# - TWILIO_AUTH_TOKEN: Your Twilio auth token
+
+# Durable Objects migrations
+[[migrations]]
+tag = "v1"
+new_classes = ["SessionManager"]
+
+[vars]
+# Environment variables (non-secret)
+PUBLIC_URL = "https://openai-twilio-realtime-worker.hall-russets0w.workers.dev"
+
+[env.production.vars]
+
+[env.development.vars]
+PUBLIC_URL = "http://localhost:8787"
+
+# Durable Objects configuration
+[[durable_objects.bindings]]
+name = "SESSION_MANAGER"
+class_name = "SessionManager"
+
+# R2 Storage configuration
+[[r2_buckets]]
+binding = "TRACKS"
+bucket_name = "tracks"
+
+# Assets configuration for static files (optional)
+# [assets]
+# directory = "./assets"
+
+# WebSocket hibernation support
+[limits]
+cpu_ms = 50000
