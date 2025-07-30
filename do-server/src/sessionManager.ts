@@ -751,6 +751,18 @@ export class SessionManager implements DurableObject {
    * Handle storing broadcast messages
    */
   private async handleStoreBroadcast(request: Request): Promise<Response> {
+    // Handle CORS preflight
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 200,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
+    }
+    
     if (request.method !== 'POST') {
       return new Response('Method Not Allowed', { status: 405 });
     }
@@ -777,10 +789,24 @@ export class SessionManager implements DurableObject {
       }
       
       console.log('Stored broadcast message:', messageId, message.type);
-      return new Response('OK', { status: 200 });
+      return new Response('OK', { 
+        status: 200,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
     } catch (error) {
       console.error('Error storing broadcast message:', error);
-      return new Response('Internal Server Error', { status: 500 });
+      return new Response('Internal Server Error', { 
+        status: 500,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
     }
   }
 
@@ -788,6 +814,18 @@ export class SessionManager implements DurableObject {
    * Handle getting pending broadcast messages
    */
   private async handleGetBroadcasts(request: Request): Promise<Response> {
+    // Handle CORS preflight
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 200,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
+    }
+    
     if (request.method !== 'GET') {
       return new Response('Method Not Allowed', { status: 405 });
     }
@@ -800,22 +838,44 @@ export class SessionManager implements DurableObject {
         this.session.broadcastMessages = [];
       }
       
+      console.log(`GET /get-broadcasts - Total stored: ${this.session.broadcastMessages.length}, lastMessageId: ${lastMessageId}`);
+      
       // Get new messages since lastMessageId
-      let newMessages = this.session.broadcastMessages.filter(msg => !msg.delivered);
+      let newMessages = [];
       
       if (lastMessageId) {
         const lastIndex = this.session.broadcastMessages.findIndex(msg => msg.messageId === lastMessageId);
         if (lastIndex >= 0) {
           newMessages = this.session.broadcastMessages.slice(lastIndex + 1);
+        } else {
+          // If lastMessageId not found, return all messages
+          newMessages = this.session.broadcastMessages;
         }
+      } else {
+        // First time - return all messages
+        newMessages = this.session.broadcastMessages;
       }
       
+      console.log(`Returning ${newMessages.length} new messages`);
+      
       return new Response(JSON.stringify(newMessages), {
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
       });
     } catch (error) {
       console.error('Error getting broadcast messages:', error);
-      return new Response('Internal Server Error', { status: 500 });
+      return new Response('Internal Server Error', { 
+        status: 500,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
     }
   }
 
