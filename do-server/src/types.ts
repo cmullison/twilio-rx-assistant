@@ -9,6 +9,19 @@ export interface Session {
   responseStartTimestamp?: number;
   latestMediaTimestamp?: number;
   openAIApiKey?: string;
+  createdAt?: number;        // Timestamp when session was created
+  lastActivity?: number;     // Timestamp of last activity for auto-cleanup
+  sessionId?: string;        // The unique session identifier used for routing
+  assignedTo?: string;       // Session ID that claimed this call
+  assignedAt?: number;       // Timestamp when call was assigned
+  callerNumber?: string;     // Full phone number of the caller
+  callerTimestamp?: number;  // Timestamp when caller number was stored
+  broadcastMessages?: Array<{
+    messageId: string;
+    message: any;
+    timestamp: number;
+    delivered: boolean;
+  }>;                        // Pending broadcast messages
 }
 
 export interface FunctionCallItem {

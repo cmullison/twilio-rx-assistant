@@ -16,7 +16,7 @@ const TopBar = () => {
       <div className="flex gap-3">
         <Button variant="ghost" size="sm">
           <Link
-            href="https://platform.openai.com/docs/guides/realtime"
+            href="https://github.com/cmullison/twilio-rx-assistant"
             className="flex items-center gap-2"
             target="_blank"
             rel="noopener noreferrer"

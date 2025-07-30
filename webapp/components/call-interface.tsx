@@ -6,10 +6,17 @@ import ChecklistAndConfig from "@/components/checklist-and-config";
 import SessionConfigurationPanel from "@/components/session-configuration-panel";
 import Transcript from "@/components/transcript";
 import FunctionCallsPanel from "@/components/function-calls-panel";
+import IncomingCallToast from "@/components/incoming-call-toast";
 import { Item } from "@/components/types";
 import handleRealtimeEvent from "@/lib/handle-realtime-event";
 import PhoneNumberChecklist from "@/components/phone-number-checklist";
-import { getBackendWsUrl } from "@/lib/config";
+import { getBackendWsUrl, getBackendHttpUrl } from "@/lib/config";
+
+interface IncomingCall {
+  callSid: string;
+  partialNumber: string;
+  timestamp: number;
+}
 
 const CallInterface = () => {
   const [selectedPhoneNumber, setSelectedPhoneNumber] = useState("");
@@ -17,20 +24,102 @@ const CallInterface = () => {
   const [items, setItems] = useState<Item[]>([]);
   const [callStatus, setCallStatus] = useState("disconnected");
   const [ws, setWs] = useState<WebSocket | null>(null);
+  const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
+  const [sessionId] = useState(() => {
+    // Generate a unique session ID for this browser session
+    return `frontend-${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2, 9)}`;
+  });
+
+  const checkForBroadcastMessages = async () => {
+    try {
+      const response = await fetch(
+        `${getBackendHttpUrl()}/broadcast-registry/get-broadcasts`
+      );
+      if (response.ok) {
+        const messages = (await response.json()) as Array<{
+          messageId: string;
+          message: any;
+          timestamp: number;
+        }>;
+        for (const msgData of messages) {
+          const { message } = msgData;
+
+          // Handle incoming call notifications
+          if (message.type === "incoming_call") {
+            setIncomingCall({
+              callSid: message.callSid,
+              partialNumber: message.partialNumber,
+              timestamp: message.timestamp,
+            });
+          } else if (message.type === "call_claimed") {
+            // Hide the toast if this call was claimed by someone else
+            if (
+              incomingCall?.callSid === message.callSid &&
+              message.claimedBy !== sessionId
+            ) {
+              setIncomingCall(null);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error checking for broadcast messages:", error);
+    }
+  };
 
   useEffect(() => {
     if (allConfigsReady && !ws) {
-      const newWs = new WebSocket(`${getBackendWsUrl()}/logs`);
+      // Check if there's a callSid in the URL (user refreshed during a call)
+      const urlParams = new URLSearchParams(window.location.search);
+      const existingCallSid = urlParams.get("callSid");
+
+      if (existingCallSid) {
+        console.log(
+          "Found existing callSid in URL, connecting to logs for in-progress call:",
+          existingCallSid
+        );
+        // Connect to logs WebSocket (not call WebSocket) and set status to in-call
+        // The transcript will come through the logs broadcast system
+        setCallStatus("in-call");
+      }
+
+      const wsUrl = `${getBackendWsUrl()}/logs?sessionId=${encodeURIComponent(
+        sessionId
+      )}`;
+      const newWs = new WebSocket(wsUrl);
 
       newWs.onopen = () => {
-        console.log("Connected to logs websocket");
+        console.log("Connected to logs websocket with session:", sessionId);
         setCallStatus("connected");
+
+        // Original approach - handle broadcasts via WebSocket messages
       };
 
       newWs.onmessage = (event) => {
         const data = JSON.parse(event.data);
         console.log("Received logs event:", data);
-        handleRealtimeEvent(data, setItems);
+
+        // Handle incoming call notifications
+        if (data.type === "incoming_call") {
+          setIncomingCall({
+            callSid: data.callSid,
+            partialNumber: data.partialNumber,
+            timestamp: data.timestamp,
+          });
+        } else if (data.type === "call_claimed") {
+          // Hide the toast if this call was claimed by someone else
+          if (
+            incomingCall?.callSid === data.callSid &&
+            data.claimedBy !== sessionId
+          ) {
+            setIncomingCall(null);
+          }
+        } else {
+          // Handle regular realtime events
+          handleRealtimeEvent(data, setItems);
+        }
       };
 
       newWs.onclose = () => {
@@ -43,8 +132,39 @@ const CallInterface = () => {
     }
   }, [allConfigsReady, ws]);
 
+  const handleAcceptCall = () => {
+    console.log("User clicked Accept on incoming call");
+  };
+
+  const handleIgnoreCall = () => {
+    console.log("User clicked Ignore on incoming call");
+    setIncomingCall(null);
+  };
+
+  const handleCloseToast = () => {
+    setIncomingCall(null);
+  };
+
+  const handleCallClaimed = (callSid: string, claimedSessionId: string) => {
+    console.log("Call claimed, updating URL for persistence:", {
+      callSid,
+      claimedSessionId,
+    });
+
+    // Update browser URL to include callSid for refresh persistence
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set("callSid", callSid);
+    window.history.pushState({}, "", newUrl.toString());
+    console.log("Updated browser URL with callSid:", newUrl.toString());
+
+    // Keep existing logs WebSocket - don't switch to call WebSocket!
+    // The frontend should stay on logs to receive transcript events
+    // Only Twilio should connect to the /call WebSocket
+    setCallStatus("in-call");
+  };
+
   return (
-    <div className="h-screen bg-white flex flex-col">
+    <div className="h-screen bg-white flex flex-col relative">
       <ChecklistAndConfig
         ready={allConfigsReady}
         setReady={setAllConfigsReady}
@@ -90,6 +210,19 @@ const CallInterface = () => {
           </div>
         </div>
       </div>
+
+      {/* Incoming Call Toast */}
+      {incomingCall && (
+        <IncomingCallToast
+          callSid={incomingCall.callSid}
+          partialNumber={incomingCall.partialNumber}
+          sessionId={sessionId}
+          onAccept={handleAcceptCall}
+          onIgnore={handleIgnoreCall}
+          onClose={handleCloseToast}
+          onCallClaimed={handleCallClaimed}
+        />
+      )}
     </div>
   );
 };

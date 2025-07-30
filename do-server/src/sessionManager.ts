@@ -6,9 +6,59 @@ export class SessionManager implements DurableObject {
   private session: Session = {};
   private websockets: Map<string, WebSocket> = new Map();
   private holdMusicService: HoldMusicService;
+  private cleanupTimer?: any;
+  private readonly CLEANUP_TIMEOUT = 300000; // 5 minutes
+  private readonly ACTIVITY_CHECK_INTERVAL = 60000; // 1 minute
 
   constructor(private ctx: DurableObjectState, private env: any) {
     this.holdMusicService = new HoldMusicService(env.TRACKS);
+    this.initializeSession();
+  }
+
+  private initializeSession(): void {
+    const now = Date.now();
+    this.session.createdAt = now;
+    this.session.lastActivity = now;
+    this.scheduleActivityCheck();
+  }
+
+  private updateActivity(): void {
+    this.session.lastActivity = Date.now();
+  }
+
+  private scheduleActivityCheck(): void {
+    // Clear existing timer
+    if (this.cleanupTimer) {
+      clearTimeout(this.cleanupTimer);
+    }
+    
+    // Schedule next check
+    this.cleanupTimer = setTimeout(() => {
+      this.checkAndCleanup();
+    }, this.ACTIVITY_CHECK_INTERVAL);
+  }
+
+  private checkAndCleanup(): void {
+    const now = Date.now();
+    const lastActivity = this.session.lastActivity || 0;
+    const timeSinceActivity = now - lastActivity;
+    
+    // If no connections and inactive for more than cleanup timeout, self-destruct
+    if (this.websockets.size === 0 && timeSinceActivity > this.CLEANUP_TIMEOUT) {
+      console.log(`Session ${this.session.sessionId} auto-cleaning up due to inactivity`);
+      this.cleanupAllConnections();
+      return;
+    }
+    
+    // If call ended but frontend is still connected, give it some time
+    if (!this.session.twilioConnId && !this.session.callSid && timeSinceActivity > this.CLEANUP_TIMEOUT / 2) {
+      console.log(`Session ${this.session.sessionId} cleaning up after call ended`);
+      this.cleanupAllConnections();
+      return;
+    }
+    
+    // Schedule next check
+    this.scheduleActivityCheck();
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -16,14 +66,26 @@ export class SessionManager implements DurableObject {
     const path = url.pathname;
     const parts = path.split('/').filter(Boolean);
     
+    // Handle non-WebSocket requests for broadcasting and storage
     if (request.headers.get('Upgrade') !== 'websocket') {
-      return new Response('Expected WebSocket', { status: 400 });
+      return this.handleHttpRequest(request, url, path);
     }
 
     const type = parts[0];
     
     if (type !== 'call' && type !== 'logs') {
       return new Response('Invalid WebSocket type', { status: 400 });
+    }
+
+    // Extract and store session ID if not already set
+    if (!this.session.sessionId) {
+      // Try to get session info from URL parameters
+      const sessionIdFromUrl = url.searchParams.get('sessionId') || 
+                              url.searchParams.get('callSid');
+      if (sessionIdFromUrl) {
+        this.session.sessionId = sessionIdFromUrl;
+        console.log('Session ID set from URL:', this.session.sessionId);
+      }
     }
 
     // Create WebSocket pair
@@ -38,11 +100,38 @@ export class SessionManager implements DurableObject {
     });
   }
 
+  private async handleHttpRequest(request: Request, url: URL, path: string): Promise<Response> {
+    try {
+      switch (path) {
+        case '/broadcast':
+          return this.handleBroadcast(request);
+        case '/store':
+          return this.handleStore(request);
+        case '/verify':
+          return this.handleVerify(request);
+        case '/store-caller':
+          return this.handleStoreCaller(request);
+        case '/verify-digits':
+          return this.handleVerifyDigits(request);
+        case '/store-broadcast':
+          return this.handleStoreBroadcast(request);
+        case '/get-broadcasts':
+          return this.handleGetBroadcasts(request);
+        default:
+          return new Response('Not Found', { status: 404 });
+      }
+    } catch (error) {
+      console.error('Error handling HTTP request:', error);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  }
+
   private async handleWebSocket(ws: WebSocket, type: string): Promise<void> {
     const connectionId = this.generateConnectionId();
     
     ws.accept();
     this.websockets.set(connectionId, ws);
+    this.updateActivity(); // Mark activity on new connection
 
     if (type === 'call') {
       await this.handleCallConnection(ws, connectionId);
@@ -66,6 +155,7 @@ export class SessionManager implements DurableObject {
 
     ws.addEventListener('close', () => {
       this.websockets.delete(connectionId);
+      this.updateActivity(); // Mark activity on close
       
       if (type === 'call' && this.session.twilioConnId === connectionId) {
         this.cleanupCallConnection();
@@ -77,6 +167,7 @@ export class SessionManager implements DurableObject {
     ws.addEventListener('error', (error) => {
       console.error('WebSocket error:', error);
       this.websockets.delete(connectionId);
+      this.updateActivity(); // Mark activity on error
     });
   }
 
@@ -94,19 +185,18 @@ export class SessionManager implements DurableObject {
   }
 
   private async handleFrontendConnection(ws: WebSocket, connectionId: string): Promise<void> {
-    // Close existing frontend connection if any
-    if (this.session.frontendConnId) {
-      const existingWs = this.websockets.get(this.session.frontendConnId);
-      if (existingWs) {
-        existingWs.close();
-      }
-    }
-
+    // Allow multiple frontend connections - don't close existing ones
+    // Just update the frontendConnId to the latest connection for any single-connection operations
     this.session.frontendConnId = connectionId;
+    
+    // No replay - live transcript only from this point forward
+    console.log('Frontend connected for live transcript');
   }
 
   private async handleTwilioMessage(msg: any, ws: WebSocket, connectionId: string): Promise<void> {
     if (!msg) return;
+    
+    this.updateActivity(); // Track activity on every message
 
     switch (msg.event) {
       case 'start':
@@ -140,6 +230,8 @@ export class SessionManager implements DurableObject {
 
   private async handleFrontendMessage(msg: any, ws: WebSocket, connectionId: string): Promise<void> {
     if (!msg) return;
+    
+    this.updateActivity(); // Track activity on every message
 
     // Handle hold music control messages from frontend
     if (msg.type === 'hold_music.start') {
@@ -257,12 +349,17 @@ export class SessionManager implements DurableObject {
   private async handleModelMessage(event: any): Promise<void> {
     if (!event) return;
 
-    // Forward to frontend if connected
+    // Forward to frontend if connected (live transcript only)
     if (this.session.frontendConnId) {
       const frontendWs = this.websockets.get(this.session.frontendConnId);
       if (frontendWs && frontendWs.readyState === WebSocket.READY_STATE_OPEN) {
         this.sendToWebSocket(frontendWs, event);
       }
+    }
+
+    // Broadcast transcript events to all frontends via shared logs session
+    if (this.shouldBroadcastToFrontends(event)) {
+      await this.broadcastToSharedLogsSession(event);
     }
 
     switch (event.type) {
@@ -464,11 +561,21 @@ export class SessionManager implements DurableObject {
     this.session.lastAssistantItem = undefined;
     this.session.responseStartTimestamp = undefined;
     this.session.latestMediaTimestamp = undefined;
+    
+    // Update activity and schedule cleanup check since call ended
+    this.updateActivity();
+    this.scheduleActivityCheck();
   }
 
   private cleanupAllConnections(): void {
     // Clean up hold music when connections close
     this.holdMusicService.resetHoldMusicState();
+    
+    // Clear cleanup timer
+    if (this.cleanupTimer) {
+      clearTimeout(this.cleanupTimer);
+      this.cleanupTimer = undefined;
+    }
     
     for (const [id, ws] of this.websockets) {
       if (ws.readyState === WebSocket.READY_STATE_OPEN) {
@@ -476,12 +583,51 @@ export class SessionManager implements DurableObject {
       }
     }
     this.websockets.clear();
+    
+    // Complete session reset
     this.session = {};
+    
+    console.log('Session cleaned up completely');
   }
 
   private sendToWebSocket(ws: WebSocket, obj: any): void {
     if (ws.readyState === WebSocket.READY_STATE_OPEN) {
       ws.send(JSON.stringify(obj));
+    }
+  }
+
+
+
+  private shouldBroadcastToFrontends(event: any): boolean {
+    // Broadcast events that frontends need to see for real-time transcript
+    const broadcastEvents = [
+      'session.created',
+      'input_audio_buffer.speech_started',
+      'conversation.item.created',
+      'conversation.item.input_audio_transcription.completed',
+      'response.content_part.added',
+      'response.audio_transcript.delta',
+      'response.output_item.done'
+    ];
+    
+    return broadcastEvents.includes(event.type);
+  }
+
+  private async broadcastToSharedLogsSession(event: any): Promise<void> {
+    try {
+      // Send to the shared logs session where all frontends are connected
+      const logsSessionId = this.env.SESSION_MANAGER.idFromName('logs-shared');
+      const logsSession = this.env.SESSION_MANAGER.get(logsSessionId);
+      
+      await logsSession.fetch(new Request('https://dummy.com/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(event)
+      }));
+      
+      console.log(`Broadcast transcript event to frontends: ${event.type}`);
+    } catch (error) {
+      console.error('Error broadcasting transcript to frontends:', error);
     }
   }
 
@@ -510,5 +656,241 @@ export class SessionManager implements DurableObject {
       callSid: this.session.callSid,
       streamSid: this.session.streamSid
     };
+  }
+
+  /**
+   * Handle broadcasting messages to frontend sessions
+   */
+  private async handleBroadcast(request: Request): Promise<Response> {
+    if (request.method !== 'POST') {
+      return new Response('Method Not Allowed', { status: 405 });
+    }
+
+    try {
+      const message = await request.json() as any;
+      let broadcastCount = 0;
+      
+      // Broadcast to ALL frontend WebSocket connections
+      for (const [connId, ws] of this.websockets.entries()) {
+        if (ws.readyState === WebSocket.READY_STATE_OPEN) {
+          this.sendToWebSocket(ws, message);
+          broadcastCount++;
+        }
+      }
+
+      console.log(`Broadcasted ${message.type} to ${broadcastCount} frontend connections`);
+      return new Response('OK', { status: 200 });
+    } catch (error) {
+      console.error('Error broadcasting message:', error);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  }
+
+  /**
+   * Handle storing call assignments
+   */
+  private async handleStore(request: Request): Promise<Response> {
+    if (request.method !== 'POST') {
+      return new Response('Method Not Allowed', { status: 405 });
+    }
+
+    try {
+      const data = await request.json() as { sessionId: string; timestamp: number };
+      
+      // Store the assignment in the session
+      this.session.assignedTo = data.sessionId;
+      this.session.assignedAt = data.timestamp;
+      
+      console.log('Stored call assignment:', { 
+        callSid: this.session.callSid,
+        assignedTo: data.sessionId,
+        timestamp: data.timestamp
+      });
+
+      return new Response('OK', { status: 200 });
+    } catch (error) {
+      console.error('Error storing call assignment:', error);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  }
+
+  /**
+   * Handle verifying call assignments
+   */
+  private async handleVerify(request: Request): Promise<Response> {
+    if (request.method !== 'POST') {
+      return new Response('Method Not Allowed', { status: 405 });
+    }
+
+    try {
+      const data = await request.json() as { sessionId: string };
+      
+      const isValid = this.session.assignedTo === data.sessionId;
+      
+      console.log('Verified call assignment:', {
+        callSid: this.session.callSid,
+        sessionId: data.sessionId,
+        assignedTo: this.session.assignedTo,
+        valid: isValid
+      });
+
+      return new Response(
+        JSON.stringify({ valid: isValid }),
+        { 
+          headers: { 'Content-Type': 'application/json' },
+          status: 200 
+        }
+      );
+    } catch (error) {
+      console.error('Error verifying call assignment:', error);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  }
+
+  /**
+   * Handle storing broadcast messages
+   */
+  private async handleStoreBroadcast(request: Request): Promise<Response> {
+    if (request.method !== 'POST') {
+      return new Response('Method Not Allowed', { status: 405 });
+    }
+
+    try {
+      const data = await request.json() as any;
+      const { message, timestamp, messageId } = data;
+      
+      // Store in session state (this will persist in Durable Object)
+      if (!this.session.broadcastMessages) {
+        this.session.broadcastMessages = [];
+      }
+      
+      this.session.broadcastMessages.push({
+        messageId,
+        message,
+        timestamp,
+        delivered: false
+      });
+      
+      // Keep only last 10 messages to prevent memory bloat
+      if (this.session.broadcastMessages.length > 10) {
+        this.session.broadcastMessages = this.session.broadcastMessages.slice(-10);
+      }
+      
+      console.log('Stored broadcast message:', messageId, message.type);
+      return new Response('OK', { status: 200 });
+    } catch (error) {
+      console.error('Error storing broadcast message:', error);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  }
+
+  /**
+   * Handle getting pending broadcast messages
+   */
+  private async handleGetBroadcasts(request: Request): Promise<Response> {
+    if (request.method !== 'GET') {
+      return new Response('Method Not Allowed', { status: 405 });
+    }
+
+    try {
+      const url = new URL(request.url);
+      const lastMessageId = url.searchParams.get('lastMessageId');
+      
+      if (!this.session.broadcastMessages) {
+        this.session.broadcastMessages = [];
+      }
+      
+      // Get new messages since lastMessageId
+      let newMessages = this.session.broadcastMessages.filter(msg => !msg.delivered);
+      
+      if (lastMessageId) {
+        const lastIndex = this.session.broadcastMessages.findIndex(msg => msg.messageId === lastMessageId);
+        if (lastIndex >= 0) {
+          newMessages = this.session.broadcastMessages.slice(lastIndex + 1);
+        }
+      }
+      
+      return new Response(JSON.stringify(newMessages), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (error) {
+      console.error('Error getting broadcast messages:', error);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  }
+
+  /**
+   * Handle storing caller phone numbers
+   */
+  private async handleStoreCaller(request: Request): Promise<Response> {
+    if (request.method !== 'POST') {
+      return new Response('Method Not Allowed', { status: 405 });
+    }
+
+    try {
+      const data = await request.json() as { callerNumber: string; timestamp: number };
+      
+      // Store the caller number in the session
+      this.session.callerNumber = data.callerNumber;
+      this.session.callerTimestamp = data.timestamp;
+      
+      console.log('Stored caller number:', { 
+        callSid: this.session.callSid,
+        callerNumber: data.callerNumber.replace(/(\d{6})\d{4}/, '$1xxxx'), // Log with masked digits
+        timestamp: data.timestamp
+      });
+
+      return new Response('OK', { status: 200 });
+    } catch (error) {
+      console.error('Error storing caller number:', error);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  }
+
+  /**
+   * Handle verifying last 4 digits
+   */
+  private async handleVerifyDigits(request: Request): Promise<Response> {
+    if (request.method !== 'POST') {
+      return new Response('Method Not Allowed', { status: 405 });
+    }
+
+    try {
+      const data = await request.json() as { lastFourDigits: string };
+      
+      if (!this.session.callerNumber) {
+        console.log('No caller number stored for verification');
+        return new Response(
+          JSON.stringify({ valid: false }),
+          { 
+            headers: { 'Content-Type': 'application/json' },
+            status: 200 
+          }
+        );
+      }
+
+      // Extract last 4 digits from stored caller number
+      const cleanCallerNumber = this.session.callerNumber.replace(/\D/g, '');
+      const actualLastFour = cleanCallerNumber.slice(-4);
+      
+      const isValid = actualLastFour === data.lastFourDigits;
+      
+      console.log('Verified last four digits:', {
+        callSid: this.session.callSid,
+        inputDigits: data.lastFourDigits,
+        valid: isValid
+      });
+
+      return new Response(
+        JSON.stringify({ valid: isValid }),
+        { 
+          headers: { 'Content-Type': 'application/json' },
+          status: 200 
+        }
+      );
+    } catch (error) {
+      console.error('Error verifying last four digits:', error);
+      return new Response('Internal Server Error', { status: 500 });
+    }
   }
 } 
