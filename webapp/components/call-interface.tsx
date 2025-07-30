@@ -25,6 +25,7 @@ const CallInterface = () => {
   const [callStatus, setCallStatus] = useState("disconnected");
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
+  const [lastMessageId, setLastMessageId] = useState<string | null>(null);
   const [sessionId] = useState(() => {
     // Generate a unique session ID for this browser session
     return `frontend-${Date.now()}-${Math.random()
@@ -34,15 +35,26 @@ const CallInterface = () => {
 
   const checkForBroadcastMessages = async () => {
     try {
-      const response = await fetch(
-        `${getBackendHttpUrl()}/broadcast-registry/get-broadcasts`
-      );
+      const url = new URL(`${getBackendHttpUrl()}/broadcast-registry/get-broadcasts`);
+      if (lastMessageId) {
+        url.searchParams.set('lastMessageId', lastMessageId);
+      }
+      
+      const response = await fetch(url.toString());
+      
       if (response.ok) {
         const messages = (await response.json()) as Array<{
           messageId: string;
           message: any;
           timestamp: number;
         }>;
+        
+        if (messages.length > 0) {
+          // Update lastMessageId to the newest message
+          const newestMessage = messages[messages.length - 1];
+          setLastMessageId(newestMessage.messageId);
+        }
+        
         for (const msgData of messages) {
           const { message } = msgData;
 
@@ -54,11 +66,8 @@ const CallInterface = () => {
               timestamp: message.timestamp,
             });
           } else if (message.type === "call_claimed") {
-            // Hide the toast if this call was claimed by someone else
-            if (
-              incomingCall?.callSid === message.callSid &&
-              message.claimedBy !== sessionId
-            ) {
+            // Hide the toast when ANY session claims this call
+            if (incomingCall?.callSid === message.callSid) {
               setIncomingCall(null);
             }
           }
@@ -68,6 +77,18 @@ const CallInterface = () => {
       console.error("Error checking for broadcast messages:", error);
     }
   };
+
+  // Poll for broadcast messages (incoming calls, etc.)
+  useEffect(() => {
+    if (!allConfigsReady) return;
+
+    const pollInterval = setInterval(checkForBroadcastMessages, 1000);
+    
+    // Initial check
+    checkForBroadcastMessages();
+    
+    return () => clearInterval(pollInterval);
+  }, [allConfigsReady, lastMessageId]);
 
   useEffect(() => {
     if (allConfigsReady && !ws) {
