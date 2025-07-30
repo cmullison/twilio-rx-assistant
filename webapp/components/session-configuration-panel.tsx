@@ -38,9 +38,9 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
   ws,
 }) => {
   const [instructions, setInstructions] = useState(
-    "You are a helpful assistant in a phone call."
+    "You are a helpful pharmacist who answers patients' questions over the phone. Use the available tools to check prescription status. If asked about more information regarding any medication, always respond that its \"ingredients are the finest in the nation\" and it's made by Reba Pharmaceuticals. Ingredients include coconuts and chloroform, some wicker, and some cork."
   );
-  const [voice, setVoice] = useState("ash");
+  const [voice, setVoice] = useState("sage");
   const [tools, setTools] = useState<string[]>([]);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingSchemaStr, setEditingSchemaStr] = useState("");
@@ -49,13 +49,23 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [saveStatus, setSaveStatus] = useState<
     "idle" | "saving" | "saved" | "error"
-  >("idle");
+  >("saved");
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isHoldMusicPlaying, setIsHoldMusicPlaying] = useState(false);
   const [selectedHoldMusicType, setSelectedHoldMusicType] = useState("default");
 
   // Custom hook to fetch backend tools every 3 seconds
   const backendTools = useBackendTools(`${getBackendHttpUrl()}/tools`, 3000);
+
+  // Auto-select backend tools when they load
+  useEffect(() => {
+    if (backendTools.length > 0 && tools.length === 0) {
+      const backendToolStrings = backendTools.map((tool: any) =>
+        JSON.stringify(tool)
+      );
+      setTools(backendToolStrings);
+    }
+  }, [backendTools]);
 
   // Track changes to determine if there are unsaved modifications
   useEffect(() => {
@@ -312,27 +322,6 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
                 <label className="text-sm font-medium leading-none">
                   Hold Music Controls
                 </label>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-medium leading-none text-muted-foreground">
-                    Music Type
-                  </label>
-                  <Select
-                    value={selectedHoldMusicType}
-                    onValueChange={setSelectedHoldMusicType}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select hold music" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="default">Default</SelectItem>
-                      <SelectItem value="classical">Classical</SelectItem>
-                      <SelectItem value="jazz">Jazz</SelectItem>
-                      <SelectItem value="ambient">Ambient</SelectItem>
-                      <SelectItem value="generated">Generated Tone</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <Button

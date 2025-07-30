@@ -5,9 +5,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "OpenAI Realtime + Twilio",
-  description:
-    "Sample phone call assistant app for OpenAI Realtime API and Twilio",
+  title: "Fluffhead Pharmacy Call Assistant",
+  description: "An AI-powered call assistant for Fluffhead Pharmacy",
 };
 
 export default function RootLayout({

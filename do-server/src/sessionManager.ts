@@ -170,7 +170,7 @@ export class SessionManager implements DurableObject {
     }
 
     if (msg.type === 'session.update') {
-      console.log('🎛️ BACKEND: Received frontend config:', JSON.stringify(msg.session, null, 2));
+      console.log('Frontend configuration updated');
       this.session.config = msg.session;
     }
   }
@@ -188,7 +188,7 @@ export class SessionManager implements DurableObject {
     }
 
         try {
-      console.log('🚀 Starting OpenAI WebSocket connection...');
+      console.log('Connecting to OpenAI Realtime API...');
       
       // Use fetch to establish WebSocket connection with proper headers
       const response = await fetch('https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17', {
@@ -209,29 +209,27 @@ export class SessionManager implements DurableObject {
 
       response.webSocket.accept();
       const modelWs = response.webSocket;
-      console.log('🔌 WebSocket accepted, ready state:', modelWs.readyState);
 
       const modelConnectionId = this.generateConnectionId();
       this.session.modelConnId = modelConnectionId;
 
       // Check if WebSocket is already open (likely when using fetch)
       if (modelWs.readyState === WebSocket.READY_STATE_OPEN) {
-        console.log('🟢 OpenAI WebSocket already open!');
+        console.log('OpenAI WebSocket connected');
         this.websockets.set(modelConnectionId, modelWs);
       } else {
         modelWs.addEventListener('open', () => {
-          console.log('🟢 OpenAI WebSocket connected successfully!');
+          console.log('OpenAI WebSocket connected');
           this.websockets.set(modelConnectionId, modelWs);
           // Note: Don't send session.update immediately - wait for session.created event
         });
       }
 
       modelWs.addEventListener('message', async (event: any) => {
-        console.log('📨 Raw message from OpenAI:', event.data);
         try {
           await this.handleModelMessage(JSON.parse(event.data as string));
         } catch (error) {
-          console.error('❌ Error parsing OpenAI message:', error, 'Raw data:', event.data);
+          console.error('Error parsing OpenAI message:', error);
         }
       });
 
@@ -257,7 +255,6 @@ export class SessionManager implements DurableObject {
   }
 
   private async handleModelMessage(event: any): Promise<void> {
-    console.log('🤖 BACKEND: Received model message:', event.type);
     if (!event) return;
 
     // Forward to frontend if connected
@@ -270,10 +267,9 @@ export class SessionManager implements DurableObject {
 
     switch (event.type) {
       case 'session.created':
-        console.log('🎯 BACKEND: session.created event received!');
         // NOW send our session configuration after OpenAI creates the session
         const config = this.session.config || {};
-        console.log('🔧 Session config being applied:', JSON.stringify(config, null, 2));
+        console.log('Applying session configuration:', config.voice || 'ash');
         
         if (this.session.modelConnId) {
           const modelWs = this.websockets.get(this.session.modelConnId);
@@ -281,26 +277,21 @@ export class SessionManager implements DurableObject {
             // Merge backend functions with frontend tools
             const backendTools = functions.map(f => f.schema);
             const frontendTools = config.tools || [];
-            console.log('🛠️ Backend tools count:', backendTools.length);
-            console.log('🎛️ Frontend tools count:', frontendTools.length);
             const allTools = [...backendTools, ...frontendTools];
 
-            const sessionUpdate = {
+            this.sendToWebSocket(modelWs, {
               type: 'session.update',
               session: {
                 modalities: ['text', 'audio'],
                 turn_detection: { type: 'server_vad' },
-                voice: 'ash', // Default fallback
+                voice: 'sage', // Default fallback
                 input_audio_transcription: { model: 'whisper-1' },
                 input_audio_format: 'g711_ulaw',
                 output_audio_format: 'g711_ulaw',
                 ...config, // Frontend config OVERRIDES defaults (including voice)
                 tools: allTools, // Ensure tools don't get overridden
               },
-            };
-            
-            console.log('📤 Sending session update:', JSON.stringify(sessionUpdate, null, 2));
-            this.sendToWebSocket(modelWs, sessionUpdate);
+            });
 
             // Add greeting message
             this.sendToWebSocket(modelWs, {
@@ -311,7 +302,7 @@ export class SessionManager implements DurableObject {
                 content: [
                   {
                     type: 'input_text',
-                    text: "When the call starts, greet the caller by saying 'Thank you for calling Fluff's Pharmacy, where our intent is all for your delight. This is the pharmacist speaking, how may I assist you today?'"
+                    text: "When the call starts, greet the caller by saying 'Thank you for calling Fluffhead Pharmacy, where our intent is all for your delight. This is the pharmacist speaking, how may I assist you today?'"
                   }
                 ]
               }
